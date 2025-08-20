@@ -11,7 +11,7 @@ public class MinimapCameraFollow : MonoBehaviour
         if (target == null) return;
 
         // Keep camera above target (x,z) at fixed height
-        transform.position = new Vector3(target.position.x, height, target.position.z);
+        transform.position = new Vector3(target.position.x, target.position.y + height, target.position.z);
 
         if (rotateWithTarget)
         {
