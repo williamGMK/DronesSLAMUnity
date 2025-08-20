@@ -101,7 +101,7 @@ public class DroneTCPClient : MonoBehaviour
                             DroneData data = JsonUtility.FromJson<DroneData>(line);
 
                             targetPosition = new Vector3(data.x, data.z, data.y);
-                            targetRotation = Quaternion.Euler(0, data.yaw, 0);
+                            targetRotation = Quaternion.Euler(0, -data.yaw, 0);
                         }
                         catch (Exception e)
                         {
