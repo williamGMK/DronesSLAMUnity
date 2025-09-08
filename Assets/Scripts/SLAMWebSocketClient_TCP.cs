@@ -6,106 +6,80 @@ using UnityEngine;
 
 public class DroneTCPClient : MonoBehaviour
 {
-    [Header("Connection Settings")]
     public string serverHost = "127.0.0.1";
     public int serverPort = 8765;
-
-    [Header("Drone Settings")]
-    public Transform droneTransform;
-    public float positionLerp = 2f;
-    public float rotationLerp = 2f;
-
-    [Serializable]
-    public class DroneData
-    {
-        public float x;
-        public float y;
-        public float z;
-        public float yaw;
-    }
+    public DroneController drone; // assign in Inspector
 
     private TcpClient client;
     private NetworkStream stream;
     private Thread receiveThread;
 
-    private Vector3 targetPosition = Vector3.zero;
-    private Quaternion targetRotation = Quaternion.identity;
+    [Serializable]
+    public class DroneData { public float x; public float y; public float z; public float yaw; }
 
     void Start()
     {
-        if (droneTransform == null)
-        {
-            droneTransform = transform; // default to this object
-        }
-        ConnectToServer(serverHost, serverPort);
+        if (drone == null) drone = GetComponent<DroneController>();
+        ConnectToServer();
     }
 
-    void Update()
-    {
-        // move the drone to the new coordinates
-        if (droneTransform != null)
-        {
-            droneTransform.position = Vector3.Lerp(droneTransform.position, targetPosition, Time.deltaTime * positionLerp);
-            droneTransform.rotation = Quaternion.Slerp(droneTransform.rotation, targetRotation, Time.deltaTime * rotationLerp);
-        }
-    }
-
-    void ConnectToServer(string host, int port)
+    void ConnectToServer()
     {
         try
         {
-            client = new TcpClient(host, port);
+            client = new TcpClient(serverHost, serverPort);
             stream = client.GetStream();
 
-            receiveThread = new Thread(new ThreadStart(ReceiveData));
-            receiveThread.IsBackground = true;
+            receiveThread = new Thread(ReceiveLoop) { IsBackground = true };
             receiveThread.Start();
 
-            Debug.Log("Connected to SLAM TCP Server");
+            Debug.Log("[TCP] Connected to SLAM server");
+
+            // Enable propellers because we are connected
+            UnityMainThreadDispatcher.Instance().Enqueue(() => {
+                if (drone != null) drone.SetPropellersActive(true);
+            });
         }
         catch (Exception e)
         {
-            Debug.LogError("Connection error: " + e.Message);
+            Debug.LogError("[TCP] Connection failed: " + e.Message);
         }
     }
 
-    void ReceiveData()
+    void ReceiveLoop()
     {
-        byte[] buffer = new byte[1024];
+        byte[] buffer = new byte[2048];
         StringBuilder sb = new StringBuilder();
-
         try
         {
-            while (true)
+            while (client != null && client.Connected)
             {
-                // number of bytes read, if 0 then skip rest of loop
-                int bytesRead = stream.Read(buffer, 0, buffer.Length);
-                if (bytesRead <= 0) continue;
+                int bytes = stream.Read(buffer, 0, buffer.Length);
+                if (bytes <= 0) continue;
+                sb.Append(Encoding.UTF8.GetString(buffer, 0, bytes));
 
-                sb.Append(Encoding.UTF8.GetString(buffer, 0, bytesRead));
-
-                // Process newline-delimited JSON
                 string content = sb.ToString();
-                int newlineIndex;
-                // while there still exists newline chars in the string
-                while ((newlineIndex = content.IndexOf('\n')) >= 0)
+                int nl;
+                while ((nl = content.IndexOf('\n')) >= 0)
                 {
-                    string line = content.Substring(0, newlineIndex).Trim();
-                    content = content.Substring(newlineIndex + 1);
+                    string line = content.Substring(0, nl).Trim();
+                    content = content.Substring(nl + 1);
 
                     if (!string.IsNullOrEmpty(line))
                     {
                         try
                         {
-                            // deserialise json data
-                            DroneData data = JsonUtility.FromJson<DroneData>(line);
-
-                            targetPosition = new Vector3(data.x, data.z, data.y);
-                            targetRotation = Quaternion.Euler(0, -data.yaw, 0);
+                            var data = JsonUtility.FromJson<DroneData>(line);
+                            // apply on main thread
+                            UnityMainThreadDispatcher.Instance().Enqueue(() =>
+                            {
+                                if (drone != null)
+                                    drone.ApplySLAM(new SLAMData { x = data.x, y = data.y, z = data.z, yaw = data.yaw });
+                            });
                         }
-                        catch (Exception e)
+                        catch (Exception ex)
                         {
-                            Debug.LogWarning("JSON parse error: " + e.Message);
+                            Debug.LogWarning("[TCP] JSON parse error: " + ex.Message + " line: " + line);
                         }
                     }
                 }
@@ -114,16 +88,23 @@ public class DroneTCPClient : MonoBehaviour
                 sb.Append(content);
             }
         }
-        catch (Exception e)
+        catch (Exception ex)
         {
-            Debug.Log("Connection closed: " + e.Message);
+            Debug.LogWarning("[TCP] Receive loop ended: " + ex.Message);
+        }
+        finally
+        {
+            UnityMainThreadDispatcher.Instance().Enqueue(() =>
+            {
+                if (drone != null) drone.SetPropellersActive(false);
+            });
         }
     }
 
     void OnApplicationQuit()
     {
-        if (receiveThread != null) receiveThread.Abort();
-        if (stream != null) stream.Close();
-        if (client != null) client.Close();
+        try { receiveThread?.Abort(); } catch { }
+        try { stream?.Close(); } catch { }
+        try { client?.Close(); } catch { }
     }
 }
