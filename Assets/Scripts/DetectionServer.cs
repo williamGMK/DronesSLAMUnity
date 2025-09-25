@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using UnityEngine;
+using TMPro;  // ✅ Add this at the top for TextMeshPro support
 
 [Serializable]
 public class DetectionData
@@ -30,7 +31,6 @@ public class DetectionServer : MonoBehaviour
 
     void Start()
     {
-        // Start listener thread
         listenerThread = new Thread(ListenForClients);
         listenerThread.IsBackground = true;
         listenerThread.Start();
@@ -83,7 +83,6 @@ public class DetectionServer : MonoBehaviour
                 string chunk = Encoding.UTF8.GetString(buffer, 0, bytesRead);
                 sb.Append(chunk);
 
-                // Process newline-delimited JSON messages
                 string all = sb.ToString();
                 int newline;
                 while ((newline = all.IndexOf('\n')) != -1)
@@ -117,22 +116,18 @@ public class DetectionServer : MonoBehaviour
 
             if (json.StartsWith("{"))
             {
-                // Single object
                 var data = JsonUtility.FromJson<DetectionData>(json);
                 if (data != null)
                     MainThreadDispatcher.Enqueue(() => SpawnMarker(data));
             }
             else if (json.StartsWith("["))
             {
-                // Array of objects → wrap in "items"
                 string wrapped = "{\"items\":" + json + "}";
                 var wrapper = JsonUtility.FromJson<DetectionArray>(wrapped);
                 if (wrapper != null && wrapper.items != null)
                 {
                     foreach (var d in wrapper.items)
-                    {
                         MainThreadDispatcher.Enqueue(() => SpawnMarker(d));
-                    }
                 }
             }
             else
@@ -146,6 +141,7 @@ public class DetectionServer : MonoBehaviour
         }
     }
 
+    // 🔹 UPDATED: TextMeshPro handling
     void SpawnMarker(DetectionData data)
     {
         if (detectionPrefab == null)
@@ -154,27 +150,22 @@ public class DetectionServer : MonoBehaviour
             return;
         }
 
-        // Use data coordinates directly (expect world coordinates)
         Vector3 pos = new Vector3(data.x, data.y, data.z);
-
         GameObject marker = Instantiate(detectionPrefab, pos, Quaternion.identity);
 
-        // --- Update label text ---
-        // First try TextMesh
-        var text = marker.GetComponentInChildren<TextMesh>();
-        if (text != null)
+        // --- Update TMP text label ---
+        var tmp = marker.GetComponentInChildren<TextMeshPro>();
+        if (tmp != null)
         {
-            text.text = data.label;
+            tmp.text = data.label;
         }
         else
         {
-            // If using TextMeshPro
-            #if TMP_PRESENT
-                    var tmp = marker.GetComponentInChildren<TMPro.TextMeshPro>();
-                    if (tmp != null) tmp.text = data.label;
-                    var tmpUGUI = marker.GetComponentInChildren<TMPro.TextMeshProUGUI>();
-                    if (tmpUGUI != null) tmpUGUI.text = data.label;
-            #endif
+            var tmpUGUI = marker.GetComponentInChildren<TextMeshProUGUI>();
+            if (tmpUGUI != null)
+                tmpUGUI.text = data.label;
+            else
+                Debug.LogWarning("No TextMeshPro component found in DetectionMarker prefab!");
         }
 
         // --- Make label face camera ---
@@ -184,7 +175,6 @@ public class DetectionServer : MonoBehaviour
 
         Destroy(marker, markerLifetime);
     }
-
 
     void OnApplicationQuit()
     {
